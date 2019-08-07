@@ -14,7 +14,7 @@ namespace gov.sandia.sld.common.utilities
             int a_addr = IPAddress.NetworkToHostOrder(BitConverter.ToInt32(a.GetAddressBytes(), 0));
             int b_addr = IPAddress.NetworkToHostOrder(BitConverter.ToInt32(b.GetAddressBytes(), 0));
             //Trace.WriteLine(string.Format("{0} - {1} == {2}", a_addr, b_addr, a_addr - b_addr));
-            return a_addr - b_addr;
+            return b_addr - a_addr;
         }
 
         public bool Equals(IPAddress x, IPAddress y)

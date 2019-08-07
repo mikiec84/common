@@ -55,7 +55,7 @@ namespace gov.sandia.sld.common.db.responders
                         PingNumPingers pn = new PingNumPingers();
                         int? num_pingers = pn.GetValueAsInt(conn);
                         if (num_pingers.HasValue)
-                            ip_request.NumPingers = num_pingers.Value;
+                            ip_request.NumPingers = (uint)num_pingers.Value;
 
                         ip_request.Handled();
                     }

@@ -8,7 +8,7 @@ namespace gov.sandia.sld.common.requestresponse
         // A list of IP addresses and the name of whatever's at that IP addr
         public List<Tuple<string, string>> IPAddresses { get; set; }
         public List<string> Subnets { get; set; }
-        public int NumPingers { get; set; }
+        public uint NumPingers { get; set; }
 
         public IPAddressRequest(string name)
             : base(name)
