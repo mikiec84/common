@@ -1,6 +1,9 @@
 ﻿using Xunit;
 using gov.sandia.sld.common.data;
 using System.Net;
+using System.Collections.Generic;
+using System;
+using System.Threading;
 
 namespace UnitTest
 {
@@ -59,5 +62,58 @@ namespace UnitTest
         //Assert.Equal((ulong)17719296, commoncli.MemoryNum);
         //Assert.Equal(16.8984375, commoncli.MemoryInMBNum, 1);
         //}
+    }
+
+    public class PingerShould
+    {
+        [Fact]
+        public void PingProperly()
+        {
+            IPAddress localhost = IPAddress.Parse("127.0.0.1");
+            List<Tuple<string, string>> ips = new List<Tuple<string, string>>()
+            {
+                Tuple.Create(localhost.ToString(), string.Empty)
+            };
+            Pinger p = new Pinger(ips);
+
+            Assert.Single(p.Pings);
+
+            PingResult r = p.Pings[0];
+
+            Assert.False(r.IsPingable);
+
+            p.DoPings(1);
+
+            Assert.Single(p.Pings);
+
+            r = p.Pings[0];
+
+            Assert.True(r.IsPingable);
+        }
+    }
+
+    public class ThreadedPingerShould
+    {
+        [Fact]
+        public void PingProperly()
+        {
+            IPAddress localhost = IPAddress.Parse("127.0.0.1");
+            List<Tuple<string, string>> ips = new List<Tuple<string, string>>()
+            {
+                Tuple.Create(localhost.ToString(), string.Empty)
+            };
+            Pinger p = new Pinger(ips);
+            ThreadedPinger tp = new ThreadedPinger(p, 1, TimeSpan.FromMilliseconds(10));
+            tp.Start();
+            Thread.Sleep(TimeSpan.FromSeconds(5));
+
+            Assert.Single(p.Pings);
+
+            PingResult r = p.Pings[0];
+
+            Assert.True(r.IsPingable);
+
+            tp.Stop();
+        }
     }
 }

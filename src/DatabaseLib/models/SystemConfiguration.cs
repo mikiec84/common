@@ -1,5 +1,6 @@
 ﻿using gov.sandia.sld.common.configuration;
 using gov.sandia.sld.common.data;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -26,6 +27,9 @@ namespace gov.sandia.sld.common.db.models
         public List<LanguageConfiguration> languages { get; set; }
         public string softwareVersion { get; set; }
         public DateTimeOffset mostRecentData { get; set; }
+
+        [JsonIgnore]
+        public DeviceInfo System { get { return devices.Find(d => d.type == EDeviceType.System); } }
 
         public SystemConfiguration()
         {

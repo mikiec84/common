@@ -15,7 +15,7 @@ namespace COMMONCLI
 {
     class Program
     {
-        static Stopwatch watch;
+        static Stopwatch __watch;
 
         static void Main(string[] args)
         {
@@ -80,9 +80,6 @@ namespace COMMONCLI
                         break;
                 }
             }
-
-            RequestBus.Instance.Subscribe(new PingResponder(ip_address));
-            //RequestBus.Instance.Subscribe(new SystemErrorsInfoResponder());
 
             Remote r = null;
             string device_name = "local";
@@ -156,12 +153,29 @@ namespace COMMONCLI
                 {
                     foreach (DataCollector collector in c)
                     {
-                        if(collector is PingCollector)
+                        __watch = Stopwatch.StartNew();
+
+                        if (collector is PingCollector)
+                        {
+                            if(string.IsNullOrEmpty(ip_address))
+                            {
+                                ShowUsage(collector_map.Keys);
+                                return;
+                            }
+
                             WriteLine($"Pinging {ip_address}");
+
+                            List<Tuple<string, string>> ip = new List<Tuple<string, string>>()
+                            {
+                                Tuple.Create(ip_address, string.Empty)
+                            };
+                            Pinger p = new Pinger(ip);
+                            p.DoPings(1);
+                            (collector as PingCollector).Pinger = p;
+                        }
                         else
                             WriteLine($"Collecting {collector.Context.Name}:");
 
-                        watch = Stopwatch.StartNew();
                         collector.Acquire();
                     }
 
@@ -173,8 +187,8 @@ namespace COMMONCLI
 
         static void OnDataAcquired(CollectedData data)
         {
-            watch.Stop();
-            long ms = watch.ElapsedMilliseconds;
+            __watch.Stop();
+            long ms = __watch.ElapsedMilliseconds;
             if(data == null)
             {
                 WriteLine("Null collected data");
@@ -309,58 +323,4 @@ namespace COMMONCLI
             Console.WriteLine(line);
         }
     }
-
-    class PingResponder : Responder
-    {
-        public string IP { get; private set; }
-
-        public PingResponder(string ip)
-        {
-            IP = ip;
-        }
-
-        public override void HandleRequest(Request request)
-        {
-            if(request is IPAddressRequest)
-            {
-                IPAddressRequest ip = request as IPAddressRequest;
-
-                if (string.IsNullOrEmpty(IP) == false)
-                {
-                    ip.IPAddresses.Add(Tuple.Create(IP, string.Empty));
-                    ip.Handled();
-                }
-                else
-                    Program.WriteLine("Invalid IP address for ping");
-            }
-        }
-    }
-
-    //class SystemErrorsInfoResponder : Responder
-    //{
-    //    public SystemErrorsInfoResponder()
-    //    {
-    //    }
-
-    //    public override void HandleRequest(Request request)
-    //    {
-    //        if(request is SystemErrorsInfoRequest)
-    //        {
-    //            SystemErrorsInfoRequest sys_errors = request as SystemErrorsInfoRequest;
-
-    //            EventLogData d = new EventLogData() { MaxRecordNumber = 284377 };
-
-    //            sys_errors.LogData.Assign(d);
-    //            sys_errors.LogData.MaxRecordNumber = 234;
-
-    //            request.Handled();
-    //        }
-    //        else if (request is SystemErrorsUpdateRequest)
-    //        {
-    //            SystemErrorsUpdateRequest sys_errors = request as SystemErrorsUpdateRequest;
-
-    //            Program.WriteLine(JsonConvert.SerializeObject(sys_errors));
-    //        }
-    //    }
-    //}
 }

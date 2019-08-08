@@ -1,4 +1,5 @@
 ﻿using COMMONWeb;
+using gov.sandia.sld.common.configuration;
 using gov.sandia.sld.common.dailyfiles;
 using gov.sandia.sld.common.data;
 using gov.sandia.sld.common.db;
@@ -13,6 +14,8 @@ using System;
 using System.Collections.Generic;
 using System.Data.SQLite;
 using System.Diagnostics;
+using System.Linq;
+using System.Net;
 using System.Reflection;
 using System.ServiceProcess;
 using System.Threading;
@@ -280,14 +283,84 @@ namespace gov.sandia.sld.common
                 //db.Initialize();
 
                 SystemConfiguration config = SystemConfigurationStore.Get(false, conn);
-                m_system_device = new SystemDevice(config, storage);
+
+                bool is_pinging = false;
+                if (config.System != null)
+                {
+                    CollectorInfo ping = config.System.collectors.Find(c => c.collectorType == ECollectorType.Ping);
+                    is_pinging = (ping != null) && ping.isEnabled;
+                }
+
+                // Do this outside of the if(is_pinging) block so if pinging was disabled we'll be fine
+                if (m_threaded_pinger != null)
+                {
+                    m_threaded_pinger.Stop();
+                    m_threaded_pinger = null;
+                }
+                m_pinger = null;
+
+                if (is_pinging)
+                {
+                    Tuple<List<Tuple<string, string>>, uint> to_ping = GetToPing();
+                    m_pinger = new Pinger(to_ping.Item1);
+                    m_threaded_pinger = new ThreadedPinger(m_pinger, to_ping.Item2, TimeSpan.FromSeconds(30));
+                }
+
+                m_system_device = new SystemDevice(config, storage, m_pinger);
 
                 DeleteDays delete_days = new DeleteDays();
                 int? days = delete_days.GetValueAsInt(conn);
                 m_days_to_keep = days ?? 180;
-
                 m_daily_file_cleaner.DaysToKeep = m_days_to_keep;
             }
+        }
+
+        /// <summary>
+        /// Gets the set of things to ping, as well as how many pingers to use
+        /// </summary>
+        /// <returns>A list of the devices to ping, and the # of pingers to use</returns>
+        private Tuple<List<Tuple<string, string>>, uint> GetToPing()
+        {
+            // Find the IP addresses to ping. This will typically provide the IP addresses
+            // of the devices being monitored, and can also provide a subnet to ping, and
+            // also any extra addresses to ping.
+            IPAddressRequest request = new IPAddressRequest("COMMONService");
+            RequestBus.Instance.MakeRequest(request);
+            if (request.IsHandled == false)
+                return null;
+
+            Dictionary<string, string> ip_to_name_map = new Dictionary<string, string>();
+            request.IPAddresses.ForEach(i => ip_to_name_map[i.Item1] = i.Item2);
+            List<Tuple<string, string>> to_ping = new List<Tuple<string, string>>(request.IPAddresses);
+
+            // See if a full subnet ping was requested
+            foreach (string s in request.Subnets)
+            {
+                if (IPAddress.TryParse(s, out IPAddress subnet))
+                {
+                    byte[] ping_addr = subnet.GetAddressBytes();
+
+                    // Collect all the pingable IP addresses on the specified subnet.
+                    // 0 and 255 are reserved, so no need to ping them.
+                    for (byte i = 1; i < 255; ++i)
+                    {
+                        ping_addr[3] = i;
+                        IPAddress addr = new IPAddress(ping_addr);
+
+                        // Get the name of the device, if we happen to know it
+                        string name = string.Empty;
+                        ip_to_name_map.TryGetValue(addr.ToString(), out name);
+
+                        to_ping.Add(Tuple.Create(addr.ToString(), name));
+                    }
+                }
+            }
+
+            // Remove any duplicate IP addresses that might have gotten in there
+            to_ping.Sort((a, b) => string.Compare(a.Item1, b.Item1));
+            to_ping = to_ping.Distinct().ToList();
+
+            return Tuple.Create(to_ping, request.NumPingers);
         }
 
         private Writer m_daily_file_writer;
@@ -295,6 +368,9 @@ namespace gov.sandia.sld.common
         private db.Cleaner m_db_cleaner;
         private Thread m_thread;
         private ManualResetEvent m_shutdown;
+
+        private Pinger m_pinger;
+        private ThreadedPinger m_threaded_pinger;
 
         private SystemDevice m_system_device;
         private DateTimeOffset m_last_configuration_update;

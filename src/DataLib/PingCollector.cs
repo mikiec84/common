@@ -1,17 +1,15 @@
 ﻿using gov.sandia.sld.common.configuration;
 using gov.sandia.sld.common.logging;
 using gov.sandia.sld.common.utilities;
-using gov.sandia.sld.common.requestresponse;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Text.RegularExpressions;
-using System.Threading;
+using System.Threading.Tasks;
 
 // http://stackoverflow.com/a/4042887/706747
 
@@ -19,11 +17,26 @@ namespace gov.sandia.sld.common.data
 {
     public class PingResult
     {
+        /// <summary>
+        /// The IP address that is being pinged
+        /// </summary>
         [JsonConverter(typeof(IPAddressConverter))]
         public IPAddress Address { get; set; }
+        /// <summary>
+        /// True if we think the address is pingable
+        /// </summary>
         public bool IsPingable { get; set; }
+        /// <summary>
+        /// The average response time in ms
+        /// </summary>
         public long AvgTime { get; set; }
+        /// <summary>
+        /// The name of the device at the IP address, if known
+        /// </summary>
         public string Name { get; set; }
+        /// <summary>
+        /// The MAC address at the IP address, if it can be determined
+        /// </summary>
         public string MAC { get; set; }
 
         public PingResult()
@@ -44,13 +57,30 @@ namespace gov.sandia.sld.common.data
             MAC = string.Empty;
         }
 
+        /// <summary>
+        /// Is considered different if the pingable status changed
+        /// or if the MAC address changed
+        /// </summary>
+        /// <param name="other">The other PingResult to compare this one with</param>
+        /// <returns>True if the ping state has changed</returns>
         public bool IsDifferent(PingResult other)
         {
-            return Address.Equals(other.Address) == false ||
-                IsPingable != other.IsPingable ||
+            return IsPingable != other.IsPingable ||
                 MAC != other.MAC;
         }
 
+        /// <summary>
+        /// Ping the IP address in Address. Will do the pinging the specified
+        /// number of times, and will update the IsPingable property if at least
+        /// half of the pings were successful. It will also update the AvgTime property
+        /// with the average of the response times.
+        /// 
+        /// The timeout is 1 second, so if the pings all fail, it will take 1*repeat
+        /// seconds to return, and the AvgTime will be 1000
+        /// </summary>
+        /// <param name="repeat">The number of times to ping in succession</param>
+        /// <returns>True if we were able to attempt the pings and the IsPingable and AvgTime
+        /// properties were updated</returns>
         public bool DoPing(uint repeat = 5)
         {
             bool success = false;
@@ -73,7 +103,7 @@ namespace gov.sandia.sld.common.data
                 {
                     for (uint i = 0; i < repeat; ++i)
                     {
-                        PingReply reply = pinger.Send(addr, timeout);
+                        PingReply reply = pinger.Send(Address, timeout);
                         if (reply.Status == IPStatus.Success)
                         {
                             ++count;
@@ -95,7 +125,7 @@ namespace gov.sandia.sld.common.data
 
                 // If we average more than half, consider it good
                 IsPingable = ((double)count / (double)repeat) >= 0.5f;
-                AvgTime = ms / repeat;
+                AvgTime = (long)(((double)ms / (double)repeat) + 0.5f);
 
                 success = true;
             }
@@ -128,7 +158,10 @@ namespace gov.sandia.sld.common.data
     }
 
     /// <summary>
-    /// Used to ping a series of IP addresses
+    /// Used to ping a series of IP addresses. Does so by creating a number
+    /// of threads, and each thread pings a chunk of addresses. The number
+    /// of threads created is specified by the num_pingers param to DoPings().
+    /// Each thread will ping roughly the same number of addresses.
     /// </summary>
     public class Pinger
     {
@@ -143,20 +176,23 @@ namespace gov.sandia.sld.common.data
             Pings = ips.ConvertAll<PingResult>(ip => new PingResult(ip.Item1, ip.Item2));
         }
 
+        /// <summary>
+        /// Pings each of the addresses specified in the Pings list. The pings are done
+        /// in spearate threads, but this method will block until they're all complete.
+        /// </summary>
+        /// <param name="num_pingers"></param>
         public void DoPings(uint num_pingers)
         {
-            // Create some # of threads for concurrent pinging. The number of threads
-            // will be around request.NumPingers.
-            ManualResetEvent complete_event = new ManualResetEvent(false);
-            int thread_count = 0;
-            List<Thread> threads = new List<Thread>();
+            // Create some # of tasks for concurrent pinging. The number of tasks
+            // will be around num_pingers.
+            List<Task> tasks = new List<Task>();
             List<List<PingResult>> chunks = Pings.ChunkBy((int)((uint)Pings.Count / num_pingers));
 
             foreach (List<PingResult> addrs in chunks)
             {
                 // Create the number of threads specified in num_pingers and ping a chunk
                 // of addresses in each thread
-                Thread t = new Thread(
+                Task t = new Task(
                     () =>
                     {
                         Stopwatch watch = Stopwatch.StartNew();
@@ -165,23 +201,25 @@ namespace gov.sandia.sld.common.data
                         local_addrs.ForEach(a => a.DoPing());
 
                         Trace.WriteLine($"Pinging {local_addrs.Count} addrs took {watch.ElapsedMilliseconds} ms");
-
-                        if (Interlocked.Decrement(ref thread_count) <= 0)
-                            complete_event.Set();
                     });
-                threads.Add(t);
+                tasks.Add(t);
             }
 
-            if (threads.Count > 0)
+            if (tasks.Count > 0)
             {
                 lock (Pings)
                 {
                     try
                     {
-                        thread_count = threads.Count;
-                        threads.ForEach(t => t.Start());
+                        Stopwatch watch = Stopwatch.StartNew();
+                        tasks.ForEach(t => t.Start());
+                        long starting = watch.ElapsedMilliseconds;
 
-                        complete_event.WaitOne();
+                        watch.Restart();
+                        Task.WaitAll(tasks.ToArray());
+                        long waited = watch.ElapsedMilliseconds;
+
+                        Trace.WriteLine($"Starting took {starting} ms, waiting took {waited} ms");
                     }
                     catch (Exception)
                     {
@@ -199,74 +237,19 @@ namespace gov.sandia.sld.common.data
         private MACAddressRetriever _mac_addr_retriever = new MACAddressRetriever();
     }
 
-    public abstract class ThreadedWorker : IDisposable
-    {
-        public ThreadedWorker(TimeSpan frequency)
-        {
-            _frequency = frequency;
-        }
-
-        public void Start()
-        {
-            if (_thread != null || _callback == null)
-                return;
-
-            _thread = new Thread(
-                () =>
-                {
-                    bool complete = false;
-                    ManualResetEvent[] events = { _stop_event };
-
-                    while (complete == false)
-                    {
-                        _callback();
-
-                        complete = ManualResetEvent.WaitAny(events, _frequency) == 0;
-                    }
-                    _stop_complete_event.Set();
-                });
-            _stop_event.Reset();
-            _stop_complete_event.Reset();
-            _thread.Start();
-        }
-
-        public void Stop()
-        {
-            _stop_event.Set();
-            _stop_complete_event.WaitOne();
-            _thread = null;
-        }
-
-        public void Dispose()
-        {
-            Stop();
-        }
-
-        protected Action _callback;
-        private Thread _thread;
-        private TimeSpan _frequency;
-        private ManualResetEvent _stop_event = new ManualResetEvent(false);
-        private ManualResetEvent _stop_complete_event = new ManualResetEvent(false);
-    }
-
+    /// <summary>
+    /// Tells a Pinger to do his pinging at the specified interval.
+    /// </summary>
     public class ThreadedPinger : ThreadedWorker
     {
-        public Pinger P { get; private set; }
-
-        public ThreadedPinger(List<Tuple<string, string>> ips, uint num_pingers)
-            : base(TimeSpan.FromSeconds(10))
+        public ThreadedPinger(Pinger pinger, uint num_pingers, TimeSpan interval)
+            : base(interval)
         {
-            P = new Pinger(ips);
-            _num_pingers = num_pingers;
-            _callback = OnPing;
+            _pinger = pinger;
+            _callback = () => _pinger.DoPings(num_pingers);
         }
 
-        public void OnPing()
-        {
-            P.DoPings(_num_pingers);
-        }
-
-        private uint _num_pingers;
+        private Pinger _pinger;
     }
 
     /// <summary>
@@ -274,92 +257,26 @@ namespace gov.sandia.sld.common.data
     /// </summary>
     public class PingCollector : DataCollector
     {
+        public Pinger Pinger { get; set; }
+
         public PingCollector(CollectorID id)
             : base(new DataCollectorContext(id, ECollectorType.Ping))
         {
-            _pinger = new ThreadedPinger(_last_to_ping, 8);
         }
 
         public override CollectedData OnAcquire()
         {
-            if (_last_to_ping == null || _last_to_ping.Count == 0)
-            {
-                _last_to_ping = GetToPing();
-            }
-            else
-            {
-                List<Tuple<string, string>> to_ping = GetToPing();
-                List<Tuple<string, string>> diff = _last_to_ping.Except(to_ping).ToList();
-
-                if(diff.Count != 0)
-                {
-                    _last_to_ping = to_ping;
-                    if(_pinger != null)
-                    {
-                        _pinger.Stop();
-                        _pinger = null;
-                    }
-                }
-            }
-
-            if(_pinger == null)
-            {
-                _pinger = new ThreadedPinger(_last_to_ping, _num_pingers);
-                _pinger.Start();
-            }
-
             ListData<PingResult> d = new ListData<PingResult>(Context);
 
-            lock(_pinger.P.Pings)
-                d.Data.AddRange(_pinger.P.Pings);
-
-            return new CollectedData(Context, true, d);
-        }
-
-        private List<Tuple<string, string>> GetToPing()
-        {
-            // Find the IP addresses to ping. This will typically provide the IP addresses
-            // of the devices being monitored, and can also provide a subnet to ping, and
-            // also any extra addresses to ping.
-            IPAddressRequest request = new IPAddressRequest("PingCollector");
-            RequestBus.Instance.MakeRequest(request);
-            if (request.IsHandled == false)
-                return null;
-
-            _num_pingers = request.NumPingers;
-
-            Dictionary<string, string> ip_to_name_map = new Dictionary<string, string>();
-            request.IPAddresses.ForEach(i => ip_to_name_map[i.Item1] = i.Item2);
-            List<Tuple<string, string>> to_ping = new List<Tuple<string, string>>(request.IPAddresses);
-
-            // See if a full subnet ping was requested
-            foreach (string s in request.Subnets)
+            // When it's time to collect the data, just grab the latest state
+            // from the Pinger we've been told to use.
+            if (Pinger != null)
             {
-                if (IPAddress.TryParse(s, out IPAddress subnet))
-                {
-                    byte[] ping_addr = subnet.GetAddressBytes();
-
-                    // Collect all the pingable IP addresses on the specified subnet.
-                    // 0 and 255 are reserved, so no need to ping them.
-                    for (byte i = 1; i < 255; ++i)
-                    {
-                        ping_addr[3] = i;
-                        IPAddress addr = new IPAddress(ping_addr);
-
-                        // Get the name of the device, if we happen to know it
-                        string name = string.Empty;
-                        ip_to_name_map.TryGetValue(addr.ToString(), out name);
-
-                        to_ping.Add(Tuple.Create(addr.ToString(), name));
-                    }
-                }
+                lock (Pinger.Pings)
+                    d.Data.AddRange(Pinger.Pings);
             }
 
-            // Remove any duplicate IP addresses that might have gotten in there
-            to_ping.Sort((a, b) => string.Compare(a.Item1, b.Item1));
-            to_ping = to_ping.Distinct().ToList();
-
-            return to_ping;
+            return new CollectedData(Context, true, d);
         }
 
         /// <summary>
@@ -378,10 +295,6 @@ namespace gov.sandia.sld.common.data
                 d.Data.AddRange(data.Value);
             return d;
         }
-
-        private ThreadedPinger _pinger;
-        private List<Tuple<string, string>> _last_to_ping;
-        private uint _num_pingers;
     }
 
     /// <summary>

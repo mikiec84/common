@@ -88,7 +88,7 @@ namespace gov.sandia.sld.common
     {
         public List<Device> Devices { get; set; }
 
-        public SystemDevice(SystemConfiguration config, DataStorage storage)
+        public SystemDevice(SystemConfiguration config, DataStorage storage, Pinger pinger)
             : base("System", storage)
         {
             m_log = LogManager.GetLogger(typeof(SystemDevice));
@@ -103,7 +103,7 @@ namespace gov.sandia.sld.common
                 ping = system.collectors.Find(c => c.collectorType == ECollectorType.Ping);
             
             if(ping != null && ping.isEnabled)
-                Collect(new PingCollector(new CollectorID(ping.id, Name)));
+                Collect(new PingCollector(new CollectorID(ping.id, Name)) { Pinger = pinger });
         }
 
         public List<DataCollector> GetCollectors(ICollectionTimeRetriever tr)
