@@ -40,7 +40,7 @@
     "angular-messages": "1.7.5",
     "angular-treasure-overlay-spinner": "^1.1.0",
     "bower": "^1.8.8",
-    "chart.js": "^2.7.3",
+    "chart.js": "^2.9.4",
     "gulp": "^3.9.1",
     "gulp-rename": "^1.4.0",
     "moment": "^2.24.0",
